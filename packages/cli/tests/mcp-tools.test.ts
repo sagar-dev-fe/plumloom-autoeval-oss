@@ -112,6 +112,16 @@ describe('Autoeval MCP tools', () => {
       'run_evaluation',
       'get_run_status',
       'get_results',
+      'import_status',
+      'import_connect',
+      'import_disconnect',
+      'import_review',
+      'import_run',
+      'import_list_workspaces',
+      'import_list_evals',
+      'import_show_eval',
+      'import_insights',
+      'import_remove_eval',
     ]);
     expect(
       tools.filter((tool) => tool.access === 'stateChanging').map((tool) => tool.name),
@@ -123,6 +133,10 @@ describe('Autoeval MCP tools', () => {
       'assign_quality_standard',
       'run_configured_evaluation',
       'run_evaluation',
+      'import_connect',
+      'import_disconnect',
+      'import_run',
+      'import_remove_eval',
     ]);
   });
 
@@ -424,5 +438,210 @@ describe('Autoeval MCP tools', () => {
       .join('\n');
 
     expect(descriptions).not.toMatch(/\/api\/|pl_sk_|authorization|evalengine/iu);
+  });
+
+  it('delegates import tools to executeImport with valid inputs and signals', async () => {
+    const executeImport = vi.fn<AutoevalMcpActions['executeImport']>().mockResolvedValue({
+      key_present: true,
+      cache_status: 'warm',
+    });
+    const abortController = new AbortController();
+    const context = mcpContext(createApi(), abortController.signal);
+    const tools = createAutoevalMcpTools(context, actions({ executeImport }));
+
+    const statusResult = await toolByName(tools, 'import_status').invoke({});
+    expect(outputOf(statusResult)).toEqual({
+      ok: true,
+      data: { key_present: true, cache_status: 'warm' },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'status' },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ total: 10 });
+    const connectResult = await toolByName(tools, 'import_connect').invoke({ refresh: true });
+    expect(outputOf(connectResult)).toEqual({
+      ok: true,
+      data: { total: 10 },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'connect', refresh: true },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ disconnected: true });
+    const disconnectResult = await toolByName(tools, 'import_disconnect').invoke({});
+    expect(outputOf(disconnectResult)).toEqual({
+      ok: true,
+      data: { disconnected: true },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'disconnect' },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ evals: [], total: 0, page: 1, size: 50 });
+    const reviewResult = await toolByName(tools, 'import_review').invoke({
+      page: 1,
+      size: 50,
+      search: 'classifier',
+      all: false,
+    });
+    expect(outputOf(reviewResult)).toEqual({
+      ok: true,
+      data: { evals: [], total: 0, page: 1, size: 50 },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'review', page: 1, size: 50, search: 'classifier', all: false },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ imported: ['eval_1'], skipped: [], failed: [] });
+    const runResult = await toolByName(tools, 'import_run').invoke({
+      eval_ids: ['eval_1'],
+      all_new: false,
+    });
+    expect(outputOf(runResult)).toEqual({
+      ok: true,
+      data: { imported: ['eval_1'], skipped: [], failed: [] },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'run', evalIds: ['eval_1'], allNew: false },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce([{ workspace_id: IDS.workspace }]);
+    const listResult = await toolByName(tools, 'import_list_workspaces').invoke({});
+    expect(outputOf(listResult)).toEqual({
+      ok: true,
+      data: [{ workspace_id: IDS.workspace }],
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'list' },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ items: [], total: 0, page: 1, page_size: 50 });
+    const evalsResult = await toolByName(tools, 'import_list_evals').invoke({
+      workspace_id: IDS.workspace,
+      page: 1,
+      size: 50,
+    });
+    expect(outputOf(evalsResult)).toEqual({
+      ok: true,
+      data: { items: [], total: 0, page: 1, page_size: 50 },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'evals', workspaceId: IDS.workspace, page: 1, size: 50 },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ eval: { name: 'Eval 1' } });
+    const showResult = await toolByName(tools, 'import_show_eval').invoke({
+      eval_id: IDS.evaluation,
+    });
+    expect(outputOf(showResult)).toEqual({
+      ok: true,
+      data: { eval: { name: 'Eval 1' } },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      {
+        operation: 'show',
+        evaluationId: IDS.evaluation,
+      },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ derived_by: 'Plumloom' });
+    const insightsResult = await toolByName(tools, 'import_insights').invoke({
+      workspace_id: IDS.workspace,
+    });
+    expect(outputOf(insightsResult)).toEqual({
+      ok: true,
+      data: { derived_by: 'Plumloom' },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'insights', workspaceId: IDS.workspace },
+      { signal: abortController.signal },
+    );
+
+    executeImport.mockResolvedValueOnce({ deleted: true });
+    const removeResult = await toolByName(tools, 'import_remove_eval').invoke({
+      eval_id: IDS.evaluation,
+      yes: true,
+    });
+    expect(outputOf(removeResult)).toEqual({
+      ok: true,
+      data: { deleted: true },
+    });
+    expect(executeImport).toHaveBeenCalledWith(
+      context.actions,
+      { operation: 'remove', evaluationId: IDS.evaluation, yes: true },
+      { signal: abortController.signal },
+    );
+  });
+
+  it('validates import tool inputs and handles execution errors', async () => {
+    const executeImport = vi.fn<AutoevalMcpActions['executeImport']>().mockRejectedValue(
+      new AutoevalError('Removal requires explicit confirmation (--yes).', {
+        kind: 'usage',
+        code: 'IMPORT_CONFIRMATION_REQUIRED',
+      }),
+    );
+    const context = mcpContext();
+    const tools = createAutoevalMcpTools(context, actions({ executeImport }));
+
+    // Rejects invalid eval ID format in schema
+    const invalidEvalIdResult = await toolByName(tools, 'import_run').invoke({
+      eval_ids: ['invalid-id-without-eval-prefix'],
+    });
+    expect(invalidEvalIdResult.isError).toBe(true);
+    expect(outputOf(invalidEvalIdResult)).toEqual({
+      ok: false,
+      error: {
+        kind: 'usage',
+        code: 'INVALID_TOOL_ARGUMENTS',
+        message: 'Tool arguments are invalid.',
+      },
+    });
+
+    // Rejects invalid UUID for workspaceId
+    const invalidWorkspaceResult = await toolByName(tools, 'import_list_evals').invoke({
+      workspace_id: 'not-a-uuid',
+    });
+    expect(invalidWorkspaceResult.isError).toBe(true);
+    expect(outputOf(invalidWorkspaceResult)).toEqual({
+      ok: false,
+      error: {
+        kind: 'usage',
+        code: 'INVALID_TOOL_ARGUMENTS',
+        message: 'Tool arguments are invalid.',
+      },
+    });
+
+    // Normalizes AutoevalError from shared action
+    const removeFailResult = await toolByName(tools, 'import_remove_eval').invoke({
+      eval_id: IDS.evaluation,
+      yes: true,
+    });
+    expect(removeFailResult.isError).toBe(true);
+    expect(outputOf(removeFailResult)).toEqual({
+      ok: false,
+      error: {
+        kind: 'usage',
+        code: 'IMPORT_CONFIRMATION_REQUIRED',
+        message: 'Removal requires explicit confirmation (--yes).',
+      },
+    });
   });
 });
