@@ -18,6 +18,7 @@ import {
   createQualityStandard,
   getQualityStandard,
 } from '../actions/quality-standards.js';
+import { executeImport } from '../actions/imports.js';
 import { getResults } from '../actions/results.js';
 import { getRunStatus, submitEvaluation } from '../actions/runs.js';
 import { createWorkspace, listWorkspaces } from '../actions/workspaces.js';
@@ -31,6 +32,13 @@ import {
   createWorkspaceInputSchema,
   emptyInputSchema,
   evaluationInputSchema,
+  importConnectInputSchema,
+  importEvaluationDetailInputSchema,
+  importEvaluationsInputSchema,
+  importRemoveEvaluationInputSchema,
+  importReviewInputSchema,
+  importWorkspaceEvaluationsInputSchema,
+  importWorkspaceIdInputSchema,
   listEvaluationsInputSchema,
   listWorkspacesInputSchema,
   mcpToolOutputSchema,
@@ -62,6 +70,7 @@ export type AutoevalMcpActions = {
   submitEvaluation: typeof submitEvaluation;
   getRunStatus: typeof getRunStatus;
   getResults: typeof getResults;
+  executeImport: typeof executeImport;
 };
 
 export const sharedAutoevalActions: AutoevalMcpActions = {
@@ -81,6 +90,7 @@ export const sharedAutoevalActions: AutoevalMcpActions = {
   submitEvaluation,
   getRunStatus,
   getResults,
+  executeImport,
 };
 
 export type AutoevalMcpTool = {
@@ -102,10 +112,12 @@ type ToolDefinitionInput<Schema extends z.ZodType> = {
 };
 
 function successResult(data: unknown): CallToolResult {
+  const safeData = z.json().parse(redactUnknown(data));
   const payload = mcpToolOutputSchema.parse({
     ok: true,
-    data: z.json().parse(redactUnknown(data)),
+    data: safeData,
   });
+
   return {
     content: [{ type: 'text', text: JSON.stringify(payload) }],
     structuredContent: payload,
@@ -379,23 +391,179 @@ export function createAutoevalMcpTools(
           ...actionSignal(context),
         }),
     }),
+    defineTool({
+      name: 'import_status',
+      title: 'Get external import status',
+      description:
+        'Checks server-side external provider key presence, access readiness, and discovery cache status.',
+      access: 'readOnly',
+      inputSchema: emptyInputSchema,
+      execute: () =>
+        actions.executeImport(context.actions, { operation: 'status' }, actionSignal(context)),
+    }),
+    defineTool({
+      name: 'import_connect',
+      title: 'Connect external import',
+      description:
+        'Validates external provider access, discovers evaluations, and updates the discovery cache. This changes cache state.',
+      access: 'stateChanging',
+      inputSchema: importConnectInputSchema,
+      execute: ({ refresh }) =>
+        actions.executeImport(
+          context.actions,
+          { operation: 'connect', refresh },
+          actionSignal(context),
+        ),
+    }),
+    defineTool({
+      name: 'import_disconnect',
+      title: 'Disconnect external import',
+      description:
+        'Clears the external evaluation discovery cache without deleting the configured provider key or imported evaluations. This changes cache state.',
+      access: 'stateChanging',
+      inputSchema: emptyInputSchema,
+      execute: () =>
+        actions.executeImport(context.actions, { operation: 'disconnect' }, actionSignal(context)),
+    }),
+    defineTool({
+      name: 'import_review',
+      title: 'Review external evaluations',
+      description:
+        'Returns cached discoverable evaluations from the external provider without importing them.',
+      access: 'readOnly',
+      inputSchema: importReviewInputSchema,
+      execute: (input) =>
+        actions.executeImport(
+          context.actions,
+          {
+            operation: 'review',
+            all: input.all,
+            ...(input.page !== undefined ? { page: input.page } : {}),
+            ...(input.size !== undefined ? { size: input.size } : {}),
+            ...(input.search !== undefined ? { search: input.search } : {}),
+          },
+          actionSignal(context),
+        ),
+    }),
+    defineTool({
+      name: 'import_run',
+      title: 'Import evaluations',
+      description:
+        'Imports specified external evaluation IDs or all new unimported evaluations into the import workspace in batches. This changes state.',
+      access: 'stateChanging',
+      inputSchema: importEvaluationsInputSchema,
+
+      execute: (input) =>
+        actions.executeImport(
+          context.actions,
+          {
+            operation: 'run',
+            allNew: input.all_new ?? false,
+            ...(input.eval_ids !== undefined ? { evalIds: input.eval_ids } : {}),
+          },
+          actionSignal(context),
+        ),
+    }),
+    defineTool({
+      name: 'import_list_workspaces',
+      title: 'List import workspaces',
+      description: 'Lists workspaces dedicated to imported external evaluations and their counts.',
+      access: 'readOnly',
+      inputSchema: emptyInputSchema,
+      execute: () =>
+        actions.executeImport(context.actions, { operation: 'list' }, actionSignal(context)),
+    }),
+    defineTool({
+      name: 'import_list_evals',
+      title: 'List evaluations in import workspace',
+      description:
+        'Lists evaluations already imported into workspaceId with source and internal identifiers.',
+      access: 'readOnly',
+      inputSchema: importWorkspaceEvaluationsInputSchema,
+      execute: (input) => {
+        const workspaceId = input.workspace_id;
+        return actions.executeImport(
+          context.actions,
+          {
+            operation: 'evals',
+            workspaceId,
+            ...(input.page !== undefined ? { page: input.page } : {}),
+            ...(input.size !== undefined ? { size: input.size } : {}),
+            ...(input.search !== undefined ? { search: input.search } : {}),
+          },
+          actionSignal(context),
+        );
+      },
+    }),
+    defineTool({
+      name: 'import_show_eval',
+      title: 'Get imported evaluation detail',
+      description:
+        'Returns detail, graders, run history, and test results for an imported evaluationId.',
+      access: 'readOnly',
+      inputSchema: importEvaluationDetailInputSchema,
+      execute: (input) => {
+        const evaluationId = input.eval_id;
+        const run = input.run_id;
+        return actions.executeImport(
+          context.actions,
+          {
+            operation: 'show',
+            evaluationId,
+            ...(run !== undefined ? { run } : {}),
+            ...(input.page !== undefined ? { page: input.page } : {}),
+            ...(input.size !== undefined ? { size: input.size } : {}),
+          },
+          actionSignal(context),
+        );
+      },
+    }),
+    defineTool({
+      name: 'import_insights',
+      title: 'Get import workspace insights',
+      description:
+        'Returns migration readiness, totals, pass-rate trends, and grader reliability insights for workspaceId.',
+      access: 'readOnly',
+      inputSchema: importWorkspaceIdInputSchema,
+      execute: (input) => {
+        const workspaceId = input.workspace_id;
+        return actions.executeImport(
+          context.actions,
+          { operation: 'insights', workspaceId },
+          actionSignal(context),
+        );
+      },
+    }),
+    defineTool({
+      name: 'import_remove_eval',
+      title: 'Remove imported evaluation',
+      description:
+        'Deletes the imported evaluation and its runs from the local workspace. Requires explicit confirmation (yes: true). This changes state.',
+      access: 'stateChanging',
+      inputSchema: importRemoveEvaluationInputSchema,
+      execute: (input) => {
+        const evaluationId = input.eval_id;
+        return actions.executeImport(
+          context.actions,
+          { operation: 'remove', evaluationId, yes: input.yes },
+          actionSignal(context),
+        );
+      },
+    }),
   ];
 }
 
-function toolAnnotations(access: McpToolAccess): ToolAnnotations {
-  return access === 'readOnly'
-    ? {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      }
-    : {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      };
+function toolAnnotations(tool: Pick<AutoevalMcpTool, 'access' | 'name'>): ToolAnnotations {
+  const isReadOnly = tool.access === 'readOnly';
+  const isDestructive = tool.name === 'import_remove_eval';
+  const isIdempotent = isReadOnly || tool.name === 'import_disconnect';
+
+  return {
+    readOnlyHint: isReadOnly,
+    destructiveHint: isDestructive,
+    idempotentHint: isIdempotent,
+    openWorldHint: true,
+  };
 }
 
 export function registerAutoevalMcpTools(
@@ -410,7 +578,7 @@ export function registerAutoevalMcpTools(
         description: tool.description,
         inputSchema: tool.inputSchema,
         outputSchema: mcpToolOutputSchema,
-        annotations: toolAnnotations(tool.access),
+        annotations: toolAnnotations(tool),
       },
       (input) => tool.invoke(input),
     );
